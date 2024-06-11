@@ -5,6 +5,7 @@ from ..utils.base_model import BaseModel
 
 sys.path.append(str(Path(__file__).parent / "../../third_party"))
 from SuperGluePretrainedNetwork.models.superglue import SuperGlue as SG  # noqa: E402
+from SuperGluePretrainedNetwork.models.utils import make_matching_plot
 
 
 class SuperGlue(BaseModel):
@@ -28,4 +29,4 @@ class SuperGlue(BaseModel):
         self.net = SG(conf)
 
     def _forward(self, data):
-        return self.net(data)
+        return self.net(data), make_matching_plot

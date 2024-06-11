@@ -5,6 +5,7 @@ import pprint
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Union
+import matplotlib.pyplot as plt
 
 import cv2
 import h5py
@@ -12,11 +13,16 @@ import numpy as np
 import PIL.Image
 import torch
 from tqdm import tqdm
+import os
 
 from . import extractors, logger
 from .utils.base_model import dynamic_load
 from .utils.io import list_h5_names, read_image
 from .utils.parsers import parse_image_lists
+
+from .utils.semantic_mask import SemanticMask
+import torchvision
+
 
 """
 A set of standard configurations that can be directly selected from the command
@@ -218,6 +224,19 @@ class ImageDataset(torch.utils.data.Dataset):
         return len(self.names)
 
 
+def plot_keypoints(image_path, keypoints):
+    image = cv2.imread(image_path)
+    #image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    for point in keypoints:
+        x, y = map(int, point)
+        cv2.circle(image, (x, y), 2, (0, 255, 0), -1)
+    
+    cv2.imwrite("/home/bananz/Downloads/img1.png", image )
+    # cv2.imshow('Image with Keypoints', image)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+
 @torch.no_grad()
 def main(
     conf: Dict,
@@ -251,13 +270,45 @@ def main(
     loader = torch.utils.data.DataLoader(
         dataset, num_workers=1, shuffle=False, pin_memory=True
     )
+
+    netMaskrcnn = (
+        torchvision.models.detection.maskrcnn_resnet50_fpn(pretrained=True)
+        .cuda()
+        .eval()
+    )
+    Mask = SemanticMask(netMaskrcnn)
+
+    # folder_name = 'masks'
+    # if not os.path.exists(str(feature_path.parent)+"/"+folder_name):
+    #     os.makedirs(str(feature_path.parent)+"/"+folder_name)
+
     for idx, data in enumerate(tqdm(loader)):
+        if data is None:
+            continue
         name = dataset.names[idx]
+        mask_image = (torch.tensor(Mask.get_mask(str(image_dir)+'/'+name))).to(torch.float32)/255
+        mask_image = mask_image[None, None, :,:]
         pred = model({"image": data["image"].to(device, non_blocking=True)})
+        # to_pil_image = torchvision.transforms.ToPILImage()
+        # image = to_pil_image(mask_image.squeeze(0).squeeze(0))
+        # image.save(str(feature_path.parent)+"/"+folder_name+"/"+str(idx).zfill(5)+'.png')
+
         pred = {k: v[0].cpu().numpy() for k, v in pred.items()}
 
+
+
+
+        #plot_keypoints(str(image_dir)+'/'+name, pred["keypoints"])
+        
         pred["image_size"] = original_size = data["original_size"][0].numpy()
         if "keypoints" in pred:
+            for point in pred["keypoints"]:
+                x,y = map(int, point)
+                if mask_image[0,0,y,x]:
+                    index = np.where((pred["keypoints"] == point).all(axis=1))[0]
+                    pred["keypoints"] = np.delete(pred["keypoints"], index, axis=0)
+                    pred["scores"] = np.delete(pred["scores"], index, axis=0)
+                    pred["descriptors"] = np.delete(pred["descriptors"], index, axis=1)
             size = np.array(data["image"].shape[-2:][::-1])
             scales = (original_size / size).astype(np.float32)
             pred["keypoints"] = (pred["keypoints"] + 0.5) * scales[None] - 0.5

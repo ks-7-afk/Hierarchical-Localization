@@ -13,6 +13,14 @@ from tqdm import tqdm
 from . import logger, matchers
 from .utils.base_model import dynamic_load
 from .utils.parsers import names_to_pair, names_to_pair_old, parse_retrieval
+import matplotlib.cm as cm
+
+import cv2
+import numpy as np
+
+# import sys
+# sys.path.append(str(Path(__file__).parent / "../../third_party"))
+# from SuperGluePretrainedNetwork.models.utils import make_matching_plot
 
 """
 A set of standard configurations that can be directly selected from the command
@@ -198,6 +206,12 @@ def find_unique_new_pairs(pairs_all: List[Tuple[str]], match_path: Path = None):
         return pairs_filtered
     return pairs
 
+def normalize_images(images):
+    min_val = np.min(images)
+    max_val = np.max(images)
+    normalized_images = (images - min_val) / (max_val - min_val)
+    
+    return normalized_images
 
 @torch.no_grad()
 def match_from_paths(
@@ -241,9 +255,36 @@ def match_from_paths(
             k: v if k.startswith("image") else v.to(device, non_blocking=True)
             for k, v in data.items()
         }
-        pred = model(data)
+        
+        pred, plot = model(data)
         pair = names_to_pair(*pairs[idx])
         writer_queue.put((pair, pred))
+
+        file_names = pair.split('/')
+        if len(file_names) == 2:            
+            img0 = cv2.imread(str(match_path.parent)+'/'+ file_names[0], cv2.IMREAD_GRAYSCALE)            
+            img1 = cv2.imread(str(match_path.parent)+'/'+ file_names[1], cv2.IMREAD_GRAYSCALE)
+    
+        pred = {k: v[0].cpu().numpy() for k, v in pred.items()}
+        data = {k: v[0].cpu().numpy() for k, v in data.items()}
+        kpts0, kpts1 = data['keypoints0'], data['keypoints1']
+        matches, conf = pred['matches0'], pred['matching_scores0']
+        valid = matches > -1
+        mkpts0 = kpts0[valid]
+        mkpts1 = kpts1[matches[valid]]
+        mconf = conf[valid]
+        color = cm.jet(mconf)
+        text = [
+                'SuperGlue',
+                'Keypoints: {}:{}'.format(len(kpts0), len(kpts1)),
+                'Matches: {}'.format(len(mkpts0)),
+            ]
+        #save images matches
+        # plot(img0,img1, kpts0, kpts1, mkpts0, mkpts1,
+        #                color, text, "/home/bananz/Downloads/match.png", show_keypoints=True,
+        #                fast_viz=True, opencv_display=False,
+        #                opencv_title='matches', small_text=[])
+        
     writer_queue.join()
     logger.info("Finished exporting matches.")
 
